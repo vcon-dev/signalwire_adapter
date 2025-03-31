@@ -1,11 +1,11 @@
 import os
 import time
 import signal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from vcon import Vcon
 from vcon.party import Party
 from vcon.dialog import Dialog
-
+import pathlib
 import requests
 import json
 import logging
@@ -25,8 +25,12 @@ PROJECT_ID = os.getenv('SIGNALWIRE_PROJECT_ID')
 AUTH_TOKEN = os.getenv('SIGNALWIRE_AUTH_TOKEN')
 SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL')
 
-# Webhook URL
+# Webhook URL (not required in debug mode)
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+
+# Debug mode settings
+DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+DEBUG_DIR = os.getenv('DEBUG_DIR', 'vcon_debug')
 
 # Poll interval in seconds (default to 5 minutes if not set)
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', 300))
@@ -36,13 +40,22 @@ required_vars = {
     'SIGNALWIRE_PROJECT_ID': PROJECT_ID,
     'SIGNALWIRE_SPACE_URL': SPACE_URL,
     'SIGNALWIRE_AUTH_TOKEN': AUTH_TOKEN,
-    'WEBHOOK_URL': WEBHOOK_URL,
     'POLL_INTERVAL': POLL_INTERVAL
 }
+
+# Webhook URL is only required if not in debug mode
+if not DEBUG_MODE and not WEBHOOK_URL:
+    required_vars['WEBHOOK_URL'] = WEBHOOK_URL
 
 missing_vars = [var for var, value in required_vars.items() if value is None]
 if missing_vars:
     raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+# If in debug mode, ensure the debug directory exists
+if DEBUG_MODE:
+    debug_path = pathlib.Path(DEBUG_DIR)
+    debug_path.mkdir(parents=True, exist_ok=True)
+    logging.info(f"Running in DEBUG MODE - vCons will be written to: {debug_path.absolute()}")
 
 recording_url = f"{SPACE_URL}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Recordings"
 calls_url = f"{SPACE_URL}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Calls"
@@ -59,7 +72,7 @@ def signal_handler(signum, frame):
 # Register the signal handler
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
-last_check_time = datetime.utcnow() - timedelta(seconds=POLL_INTERVAL)
+last_check_time = datetime.now(UTC) - timedelta(seconds=POLL_INTERVAL)
 
 
 def fetch_call_meta(call_sid):
@@ -107,7 +120,7 @@ def fetch_new_recordings(last_check_time):
                                 auth=(PROJECT_ID, AUTH_TOKEN))
     
     # Update last_check_time
-    last_check_time = datetime.utcnow()
+    last_check_time = datetime.now(UTC)
     
     # Check if the request was successful
     if response.status_code == 200:
@@ -155,9 +168,10 @@ def create_vcon_from_recording(recording) -> Vcon:
         logging.warning(f"Failed to parse recording['date_created'] for {recording['sid']}")
         recording_date_created_iso = None
 
-    party1 = Party({"tel": call_meta['to_formatted']})
+    # Updated: Create Party objects with named parameters instead of dictionary
+    party1 = Party(tel=call_meta['to_formatted'])
     vcon.add_party(party1)
-    party2 = Party({"tel": call_meta['from_formatted']})
+    party2 = Party(tel=call_meta['from_formatted'])
     vcon.add_party(party2)
     
     # Add the dialog, and calculate the correct URL for the recording
@@ -166,13 +180,19 @@ def create_vcon_from_recording(recording) -> Vcon:
     recording_url = f"{SPACE_URL}{recording['uri']}"
     # remove the trailing .json and add .mp3
     recording_url = recording_url[:-5] + '.mp3'
-    dialog = Dialog(start=recording_date_created_iso, 
-                    parties=[0, 1], 
-                    type="recording", 
-                    duration=recording['duration'],
-                    url=recording_url,
-                    mimetype="audio/mpeg")
+    
+    # Updated: Create Dialog with named parameters instead of dictionary
+    dialog = Dialog(
+        start=recording_date_created_iso, 
+        parties=[0, 1], 
+        type="recording", 
+        duration=recording['duration'],
+        url=recording_url,
+        mimetype="audio/mpeg"
+    )
     vcon.add_dialog(dialog)
+    
+    # Updated: Add attachment with named parameters
     vcon.add_attachment(
         type="recording_metadata",
         body={
@@ -181,14 +201,16 @@ def create_vcon_from_recording(recording) -> Vcon:
             "call_sid": recording['call_sid'],
             "channels": recording['channels'],
             "source": "SignalWire",
-        } 
+        }
     )
+    
     # Add the transcription if it exists
     if 'transcriptions' in recording['subresource_uris']:
         response = fetch_transcription(recording['subresource_uris']['transcriptions'])
         
         for transcription in response['transcriptions']:
             if 'text' in transcription:
+                # Updated: Add attachment with named parameters
                 vcon.add_attachment(
                     type="transcription",
                     body=transcription
@@ -203,8 +225,32 @@ def download_recording(url):
     else:
         raise Exception(f"Failed to download recording: {response.status_code}")
 
+def write_vcon_to_file(vcon):
+    """
+    Write the vCon to a local file in the debug directory
+    
+    :param vcon: The vCon object to write
+    """
+    # Create a filename based on the vCon UUID and timestamp
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    filename = f"{timestamp}_{vcon.uuid}.json"
+    file_path = pathlib.Path(DEBUG_DIR) / filename
+    
+    try:
+        with open(file_path, 'w') as f:
+            f.write(vcon.to_json())
+        logging.info(f"Successfully wrote vCon to file: {file_path}")
+    except Exception as e:
+        logging.error(f"Failed to write vCon to file: {str(e)}")
+
 def send_vcon_to_webhook(vcon):
-    """Send the vCon to the configured webhook"""
+    """Send the vCon to the configured webhook or write to file in debug mode"""
+    # In debug mode, write to file instead of sending to webhook
+    if DEBUG_MODE:
+        write_vcon_to_file(vcon)
+        return
+
+    # Normal webhook operation
     headers = {'Content-Type': 'application/json'}
     payload = vcon.to_json()
 
@@ -233,12 +279,15 @@ def process_recordings(last_check_time):
 
 def main():
     global running
-    last_check_time = datetime.utcnow() - timedelta(seconds=POLL_INTERVAL)
+    last_check_time = datetime.now(UTC) - timedelta(seconds=POLL_INTERVAL)
 
-    logging.info("Starting SignalWire vCon processing script")
+    if DEBUG_MODE:
+        logging.info("Starting SignalWire vCon processing script in DEBUG MODE")
+    else:
+        logging.info("Starting SignalWire vCon processing script")
 
     while running:
-        current_time = datetime.utcnow()
+        current_time = datetime.now(UTC)
         logging.info(f"Checking for new recordings since {last_check_time}")
 
         try:

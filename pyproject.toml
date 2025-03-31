@@ -7,10 +7,11 @@ license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.12"
 signalwire = "^2.1.0"
 python-dotenv = "^1.0.1"
-vcon = "^0.3.0"
+vcon = "^0.5.0"
+pytest = "^8.3.5"
 
 
 [build-system]

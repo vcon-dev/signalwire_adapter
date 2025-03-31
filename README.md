@@ -13,7 +13,7 @@ This Python script continuously polls the SignalWire API for new call recordings
 
 ## Prerequisites
 
-- Python 3.6 or higher
+- Python 3.12
 - SignalWire account and API credentials
 - Webhook endpoint to receive vCon data
 
@@ -87,6 +87,23 @@ The script includes error handling to manage issues with the SignalWire API, web
 ## Production Deployment
 
 For production deployment, consider using a process manager like supervisord or systemd to ensure the script keeps running and to manage automatic restarts if needed.
+
+## Python 3.12 Compatibility
+
+This project has been updated to use Python 3.12, which offers:
+
+- Improved performance
+- Better error messages with more precise information
+- Enhanced type hinting and static analysis
+- More efficient memory management
+
+If you're upgrading from a previous version:
+
+1. Make sure you have Python 3.12 installed
+2. Update your virtual environment if you're using one
+3. Reinstall dependencies using Poetry: `poetry install`
+   
+Docker users: The Dockerfile has been updated to use the Python 3.12 base image.
 
 ## Contributing
 

@@ -1,0 +1,23 @@
+version: "3.3"
+
+networks:
+  conserver:
+    external: true
+
+services:
+  signalwire-adapter:
+    build:
+      dockerfile: ./docker/Dockerfile
+      context: .
+    command: "python signalwire_adapter.py"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    restart: unless-stopped
+    stop_grace_period: 60s
+    # Uncomment the ports section if you need to expose any ports
+    # ports:
+    #   - "8080:8080"
+    networks:
+      - conserver
