@@ -11,8 +11,15 @@ python = "^3.12"
 signalwire = "^2.1.0"
 python-dotenv = "^1.0.1"
 vcon = "^0.5.0"
-pytest = "^8.3.5"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+pytest-cov = "^4.1.0"
+requests-mock = "^1.11.0"
+
+[tool.pytest.ini_options]
+testpaths = ["test_signalwire_adapter.py"]
+addopts = "-v --cov=signalwire_adapter --cov-report=term --cov-report=html"
 
 [build-system]
 requires = ["poetry-core"]

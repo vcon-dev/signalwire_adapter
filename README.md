@@ -21,11 +21,47 @@ This Python script continuously polls the SignalWire API for new call recordings
 
 1. Clone this repository or download the script.
 
-2. Install the required Python packages:
+2. Install dependencies using Poetry (recommended):
 
+   ```bash
+   # Install Poetry
+   curl -sSL https://install.python-poetry.org | python3 -
+   
+   # Install dependencies
+   poetry install
    ```
-   pip install signalwire vcon requests
+
+   Alternatively, you can use pip:
+
+   ```bash
+   pip install signalwire vcon requests python-dotenv
    ```
+
+## Development Setup
+
+This project uses Poetry for dependency management. To set up a development environment:
+
+1. Install Poetry if you haven't already:
+
+   ```bash
+   curl -sSL https://install.python-poetry.org | python3 -
+   ```
+
+2. Install project dependencies:
+
+   ```bash
+   poetry install
+   ```
+
+   This will create a virtual environment and install both main and development dependencies.
+
+3. Activate the virtual environment:
+
+   ```bash
+   poetry shell
+   ```
+
+4. You can now run the script, tests, or other development tasks within this environment.
 
 ## Configuration
 
@@ -49,9 +85,16 @@ export POLL_INTERVAL=300
 
 ## Usage
 
-Run the script using Python:
+Run the script using Poetry:
 
+```bash
+poetry run python signalwire_vcon_script.py
 ```
+
+Or activate the Poetry environment first:
+
+```bash
+poetry shell
 python signalwire_vcon_script.py
 ```
 
@@ -84,6 +127,34 @@ When terminated, the script will complete processing the current batch of record
 
 The script includes error handling to manage issues with the SignalWire API, webhook communication, or other unexpected errors. All errors are logged for later review.
 
+## Testing
+
+This project uses pytest for testing and Poetry for dependency management. The test suite verifies the functionality of the SignalWire adapter, including API interactions and vCon creation.
+
+### Running Tests
+
+To run the tests:
+
+```bash
+./run_tests.sh
+```
+
+This script will:
+1. Install all dependencies using Poetry
+2. Run the test suite with code coverage reporting
+3. Generate HTML coverage reports in the `htmlcov/` directory
+
+### Test Configuration
+
+Tests are configured in `pyproject.toml` with the following settings:
+- Full test coverage reporting for the `signalwire_adapter` module
+- Both terminal and HTML coverage reports
+- Verbose test output
+
+### Adding New Tests
+
+When adding new functionality, please ensure test coverage by adding test cases to `test_signalwire_adapter.py`.
+
 ## Production Deployment
 
 For production deployment, consider using a process manager like supervisord or systemd to ensure the script keeps running and to manage automatic restarts if needed.
@@ -101,7 +172,7 @@ If you're upgrading from a previous version:
 
 1. Make sure you have Python 3.12 installed
 2. Update your virtual environment if you're using one
-3. Reinstall dependencies using Poetry: `poetry install`
+3. Install dependencies using Poetry: `poetry install`
    
 Docker users: The Dockerfile has been updated to use the Python 3.12 base image.
 

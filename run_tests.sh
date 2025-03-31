@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Install test dependencies
-pip install -r requirements-dev.txt
+# Install dependencies using Poetry
+poetry install
 
-# Run tests with coverage
-pytest test_signalwire_adapter.py -v --cov=signalwire_adapter --cov-report=term --cov-report=html
+# Run tests with coverage using Poetry (pytest settings from pyproject.toml)
+poetry run pytest
 
 echo "HTML coverage report generated in htmlcov/ directory" 
