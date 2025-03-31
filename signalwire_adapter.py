@@ -35,6 +35,13 @@ DEBUG_DIR = os.getenv('DEBUG_DIR', 'vcon_debug')
 # Poll interval in seconds (default to 5 minutes if not set)
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', 300))
 
+# File to store processed call SIDs
+PROCESSED_CALLS_FILE = os.getenv('PROCESSED_CALLS_FILE', 'processed_calls.json')
+
+# Retention period for processed calls in days (default to 30 days)
+# After this period, call records will be removed from the processed_calls.json file
+RETENTION_DAYS = int(os.getenv('RETENTION_DAYS', 30))
+
 # Check if all required environment variables are set
 required_vars = {
     'SIGNALWIRE_PROJECT_ID': PROJECT_ID,
@@ -74,6 +81,72 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 last_check_time = datetime.now(UTC) - timedelta(seconds=POLL_INTERVAL)
 
+
+def load_processed_calls():
+    """
+    Load the list of already processed call SIDs from the JSON file.
+    
+    :return: Dictionary of processed call SIDs with timestamps
+    """
+    try:
+        with open(PROCESSED_CALLS_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # If file doesn't exist or is empty/invalid, return empty dict
+        return {}
+
+def save_processed_calls(processed_calls):
+    """
+    Save the list of processed call SIDs to the JSON file.
+    
+    :param processed_calls: Dictionary of processed call SIDs with timestamps
+    """
+    with open(PROCESSED_CALLS_FILE, 'w') as f:
+        json.dump(processed_calls, f)
+
+def cleanup_old_call_records(processed_calls):
+    """
+    Remove call records that are older than the retention period.
+    
+    :param processed_calls: Dictionary of processed call SIDs with timestamps
+    :return: Cleaned dictionary with only recent call records
+    """
+    now = datetime.now(UTC)
+    retention_cutoff = now - timedelta(days=RETENTION_DAYS)
+    
+    # Count before cleanup
+    original_count = len(processed_calls)
+    
+    # Filter out old records
+    recent_calls = {}
+    for call_sid, timestamp_str in processed_calls.items():
+        try:
+            # Parse the timestamp (handle both formats with/without timezone)
+            if timestamp_str.endswith('Z'):
+                # Already in UTC format
+                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            else:
+                # Try to parse with timezone, fall back to assuming UTC
+                try:
+                    timestamp = datetime.fromisoformat(timestamp_str)
+                except ValueError:
+                    # If parsing fails, assume it's UTC without the timezone info
+                    timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=UTC)
+            
+            # Keep only records newer than the cutoff
+            if timestamp > retention_cutoff:
+                recent_calls[call_sid] = timestamp_str
+        except (ValueError, TypeError):
+            # If we can't parse the timestamp, keep the record to be safe
+            recent_calls[call_sid] = timestamp_str
+            logging.warning(f"Could not parse timestamp for call_sid {call_sid}: {timestamp_str}")
+    
+    # Count after cleanup
+    removed_count = original_count - len(recent_calls)
+    if removed_count > 0:
+        logging.info(f"Cleaned up {removed_count} call records older than {RETENTION_DAYS} days")
+    
+    return recent_calls
 
 def fetch_call_meta(call_sid):
     """
@@ -119,9 +192,6 @@ def fetch_new_recordings(last_check_time):
                                 data=payload,
                                 auth=(PROJECT_ID, AUTH_TOKEN))
     
-    # Update last_check_time
-    last_check_time = datetime.now(UTC)
-    
     # Check if the request was successful
     if response.status_code == 200:
         # Extract the recordings from the response
@@ -147,74 +217,87 @@ def fetch_transcription(url):
     else:
         raise Exception(f"Failed to fetch transcription: {response.status_code}")
     
-def create_vcon_from_recording(recording) -> Vcon:
+def format_to_e164(phone_number):
     """
-    Create a vCon object from a SignalWire recording object.
+    Ensure a phone number is formatted in E.164 format.
+    
+    :param phone_number: Phone number string to format
+    :return: E.164 formatted phone number
+    """
+    # Remove any non-digit characters except the leading plus
+    cleaned = ''.join(c for i, c in enumerate(phone_number) if c.isdigit() or (i == 0 and c == '+'))
+    
+    # Ensure there's a leading plus
+    if not cleaned.startswith('+'):
+        cleaned = '+' + cleaned
+        
+    return cleaned
+    
+def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
+    """
+    Create a vCon object from multiple SignalWire recording objects that belong to the same call.
 
-    :param recording: The SignalWire recording object
+    :param recordings: List of SignalWire recording objects for the same call
+    :param call_meta: The call metadata
     :return: The created vCon object
     """
-    
     vcon = Vcon.build_new()
     
-    # Fetch the call meta data based on ths recording['call_sid']
-    call_meta = fetch_call_meta(recording['call_sid'])
-    
-    # Try to convert recording['date_created'] from RFC 2822 to ISO format
-    try:
-        recording_date_created = email.utils.parsedate_to_datetime(recording['date_created'])
-        recording_date_created_iso = recording_date_created.isoformat()
-    except TypeError:
-        logging.warning(f"Failed to parse recording['date_created'] for {recording['sid']}")
-        recording_date_created_iso = None
-
-    # Updated: Create Party objects with named parameters instead of dictionary
-    party1 = Party(tel=call_meta['to_formatted'])
+    # Create Party objects with named parameters, ensuring phone numbers are in E.164 format
+    party1 = Party(tel=format_to_e164(call_meta['to_formatted']))
     vcon.add_party(party1)
-    party2 = Party(tel=call_meta['from_formatted'])
+    party2 = Party(tel=format_to_e164(call_meta['from_formatted']))
     vcon.add_party(party2)
     
-    # Add the dialog, and calculate the correct URL for the recording
-    # Add the attachment with the recording metadata
-    # Add the transcription if it exists
-    recording_url = f"{SPACE_URL}{recording['uri']}"
-    # remove the trailing .json and add .mp3
-    recording_url = recording_url[:-5] + '.mp3'
-    
-    # Updated: Create Dialog with named parameters instead of dictionary
-    dialog = Dialog(
-        start=recording_date_created_iso, 
-        parties=[0, 1], 
-        type="recording", 
-        duration=recording['duration'],
-        url=recording_url,
-        mimetype="audio/mpeg"
-    )
-    vcon.add_dialog(dialog)
-    
-    # Updated: Add attachment with named parameters
-    vcon.add_attachment(
-        type="recording_metadata",
-        body={
-            "sid": recording['sid'],
-            "account_sid": recording['account_sid'],
-            "call_sid": recording['call_sid'],
-            "channels": recording['channels'],
-            "source": "SignalWire",
-        }
-    )
-    
-    # Add the transcription if it exists
-    if 'transcriptions' in recording['subresource_uris']:
-        response = fetch_transcription(recording['subresource_uris']['transcriptions'])
+    # Add all recordings as dialogs
+    for recording in recordings:
+        # Try to convert recording['date_created'] from RFC 2822 to ISO format
+        try:
+            recording_date_created = email.utils.parsedate_to_datetime(recording['date_created'])
+            recording_date_created_iso = recording_date_created.isoformat()
+        except TypeError:
+            logging.warning(f"Failed to parse recording['date_created'] for {recording['sid']}")
+            recording_date_created_iso = None
+            
+        # Calculate the correct URL for the recording
+        recording_url = f"{SPACE_URL}{recording['uri']}"
+        # remove the trailing .json and add .mp3
+        recording_url = recording_url[:-5] + '.mp3'
         
-        for transcription in response['transcriptions']:
-            if 'text' in transcription:
-                # Updated: Add attachment with named parameters
-                vcon.add_attachment(
-                    type="transcription",
-                    body=transcription
-                )
+        # Create Dialog with named parameters
+        dialog = Dialog(
+            start=recording_date_created_iso, 
+            parties=[0, 1], 
+            type="recording", 
+            duration=recording['duration'],
+            url=recording_url,
+            mimetype="audio/mpeg"
+        )
+        vcon.add_dialog(dialog)
+        
+        # Add attachment with recording metadata
+        vcon.add_attachment(
+            type="recording_metadata",
+            body={
+                "sid": recording['sid'],
+                "account_sid": recording['account_sid'],
+                "call_sid": recording['call_sid'],
+                "channels": recording['channels'],
+                "source": "SignalWire",
+            }
+        )
+        
+        # Add the transcription if it exists
+        if 'transcriptions' in recording['subresource_uris']:
+            response = fetch_transcription(recording['subresource_uris']['transcriptions'])
+            
+            for transcription in response['transcriptions']:
+                if 'text' in transcription:
+                    vcon.add_attachment(
+                        type="transcription",
+                        body=transcription
+                    )
+    
     return vcon
 
 def download_recording(url):
@@ -225,29 +308,30 @@ def download_recording(url):
     else:
         raise Exception(f"Failed to download recording: {response.status_code}")
 
-def write_vcon_to_file(vcon):
+def write_vcon_to_file(vcon, call_sid):
     """
     Write the vCon to a local file in the debug directory
     
     :param vcon: The vCon object to write
+    :param call_sid: The call SID for this vCon
     """
-    # Create a filename based on the vCon UUID and timestamp
+    # Create a filename based on the call SID, vCon UUID and timestamp
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_{vcon.uuid}.json"
+    filename = f"{timestamp}_{call_sid}_{vcon.uuid}.json"
     file_path = pathlib.Path(DEBUG_DIR) / filename
     
     try:
         with open(file_path, 'w') as f:
             f.write(vcon.to_json())
-        logging.info(f"Successfully wrote vCon to file: {file_path}")
+        logging.info(f"Successfully wrote vCon for call {call_sid} to file: {file_path}")
     except Exception as e:
         logging.error(f"Failed to write vCon to file: {str(e)}")
 
-def send_vcon_to_webhook(vcon):
+def send_vcon_to_webhook(vcon, call_sid):
     """Send the vCon to the configured webhook or write to file in debug mode"""
     # In debug mode, write to file instead of sending to webhook
     if DEBUG_MODE:
-        write_vcon_to_file(vcon)
+        write_vcon_to_file(vcon, call_sid)
         return
 
     # Normal webhook operation
@@ -257,25 +341,53 @@ def send_vcon_to_webhook(vcon):
     try:
         response = requests.post(WEBHOOK_URL, headers=headers, data=payload, timeout=10)
         response.raise_for_status()
-        logging.info(f"Successfully sent vCon to webhook: {vcon.uuid}")
+        logging.info(f"Successfully sent vCon for call {call_sid} to webhook: {vcon.uuid}")
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to send vCon to webhook: {str(e)}")
 
 def process_recordings(last_check_time):
     new_recordings = fetch_new_recordings(last_check_time)
-
+    processed_calls = load_processed_calls()
+    
+    # Clean up old call records to prevent excessive growth of the processed_calls.json file
+    processed_calls = cleanup_old_call_records(processed_calls)
+    
+    # Group recordings by call_sid
+    recordings_by_call = {}
     for recording in new_recordings:
-        logging.info(f"Processing recording: {recording['sid']}")
+        call_sid = recording['call_sid']
+        if call_sid not in recordings_by_call:
+            recordings_by_call[call_sid] = []
+        recordings_by_call[call_sid].append(recording)
+    
+    # Process each call_sid only once
+    for call_sid, recordings in recordings_by_call.items():
+        # Skip if we've already processed this call_sid
+        if call_sid in processed_calls:
+            logging.info(f"Skipping already processed call: {call_sid}")
+            continue
+            
+        logging.info(f"Processing conversation with call_sid: {call_sid} ({len(recordings)} recordings)")
 
         try:
-            # Create vCon
-            vcon = create_vcon_from_recording(recording)
+            # Fetch call metadata once per call
+            call_meta = fetch_call_meta(call_sid)
+            
+            # Create a single vCon for all recordings in this call
+            vcon = create_vcon_from_recordings(recordings, call_meta)
+            
             # Send the vCon to the configured webhook
-            send_vcon_to_webhook(vcon)
-
-            logging.info(f"Processed vCon for recording: {recording['sid']}")
+            send_vcon_to_webhook(vcon, call_sid)
+            
+            # Mark this call as processed
+            processed_calls[call_sid] = datetime.now(UTC).isoformat()
+            
+            logging.info(f"Processed vCon for call: {call_sid}")
         except Exception as e:
-            logging.error(f"Error processing recording {recording['sid']}: {str(e)}")
+            logging.error(f"Error processing call {call_sid}: {str(e)}")
+    
+    # Save the updated processed calls list with any new entries and after cleanup
+    save_processed_calls(processed_calls)
 
 def main():
     global running

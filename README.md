@@ -10,6 +10,7 @@ This Python script continuously polls the SignalWire API for new call recordings
 - Sends vCons to a configured webhook
 - Handles graceful shutdown on termination signals
 - Provides detailed logging
+- Supports debug mode for local testing and diagnostics
 
 ## Prerequisites
 
@@ -70,8 +71,10 @@ The script uses environment variables for configuration. Set the following varia
 - `SIGNALWIRE_PROJECT_ID`: Your SignalWire Project ID
 - `SIGNALWIRE_AUTH_TOKEN`: Your SignalWire Auth Token
 - `SIGNALWIRE_SPACE_URL`: Your SignalWire Space URL
-- `WEBHOOK_URL`: The URL of the webhook to receive vCon data
+- `WEBHOOK_URL`: The URL of the webhook to receive vCon data (not required in debug mode)
 - `POLL_INTERVAL`: The interval (in seconds) between API polls (default: 300)
+- `DEBUG_MODE`: Set to "true" to enable debug mode (default: "false")
+- `DEBUG_DIR`: Directory where vCon files will be saved in debug mode (default: "vcon_debug")
 
 Example:
 
@@ -81,7 +84,19 @@ export SIGNALWIRE_AUTH_TOKEN=your_auth_token
 export SIGNALWIRE_SPACE_URL=your_space_url
 export WEBHOOK_URL=https://your-webhook-endpoint.com/vcon
 export POLL_INTERVAL=300
+export DEBUG_MODE=false
+export DEBUG_DIR=vcon_debug
 ```
+
+### Debug Mode
+
+When `DEBUG_MODE` is set to "true", the script will:
+
+1. Not require a webhook URL
+2. Save vCon objects as JSON files to the directory specified by `DEBUG_DIR` instead of sending them to a webhook
+3. Log additional information to assist with debugging
+
+This is useful for testing and development without needing a webhook endpoint.
 
 ## Usage
 
@@ -103,7 +118,7 @@ The script will start polling the SignalWire API for new recordings at the speci
 1. Create a vCon object
 2. Download the audio content
 3. Add the audio content to the vCon
-4. Send the vCon to the configured webhook
+4. Send the vCon to the configured webhook (or save to file in debug mode)
 
 ## Logging
 
