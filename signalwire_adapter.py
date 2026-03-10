@@ -220,17 +220,24 @@ def fetch_transcription(url):
 def format_to_e164(phone_number):
     """
     Ensure a phone number is formatted in E.164 format.
-    
+
     :param phone_number: Phone number string to format
     :return: E.164 formatted phone number
     """
     # Remove any non-digit characters except the leading plus
     cleaned = ''.join(c for i, c in enumerate(phone_number) if c.isdigit() or (i == 0 and c == '+'))
-    
-    # Ensure there's a leading plus
+    digits = cleaned.lstrip('+')
+
+    # 10-digit US number — prepend +1
+    if len(digits) == 10:
+        return '+1' + digits
+    # 11-digit number starting with 1 (US with country code) — prepend +
+    if len(digits) == 11 and digits.startswith('1'):
+        return '+' + digits
+
+    # Already has + or other international format
     if not cleaned.startswith('+'):
-        cleaned = '+' + cleaned
-        
+        return '+' + cleaned
     return cleaned
     
 def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
@@ -242,7 +249,8 @@ def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
     :return: The created vCon object
     """
     vcon = Vcon.build_new()
-    
+    vcon.vcon_dict.pop('vcon', None)  # 'vcon' version field is deprecated per IETF draft-ietf-vcon-vcon-core-01
+
     # Create Party objects with named parameters, ensuring phone numbers are in E.164 format
     party1 = Party(tel=format_to_e164(call_meta['to_formatted']))
     vcon.add_party(party1)

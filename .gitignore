@@ -24,3 +24,7 @@ config.json
 
 # Add your own custom ignores here...
 .venv/
+
+# Runtime state and debug output
+processed_calls.json
+vcon_debug/
