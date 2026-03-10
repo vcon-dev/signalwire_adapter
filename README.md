@@ -103,14 +103,14 @@ This is useful for testing and development without needing a webhook endpoint.
 Run the script using Poetry:
 
 ```bash
-poetry run python signalwire_vcon_script.py
+poetry run python signalwire_adapter.py
 ```
 
 Or activate the Poetry environment first:
 
 ```bash
 poetry shell
-python signalwire_vcon_script.py
+python signalwire_adapter.py
 ```
 
 The script will start polling the SignalWire API for new recordings at the specified interval. For each new recording, it will:
@@ -125,7 +125,7 @@ The script will start polling the SignalWire API for new recordings at the speci
 The script logs its operations to the console. You can redirect this output to a file for persistent logging:
 
 ```
-python signalwire_vcon_script.py > signalwire_vcon_processor.log 2>&1
+python signalwire_adapter.py > signalwire_vcon_processor.log 2>&1
 ```
 
 ## Termination

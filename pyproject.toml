@@ -14,7 +14,7 @@ vcon = "^0.5.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
-pytest-cov = "^4.1.0"
+pytest-cov = "^5.0.0"
 requests-mock = "^1.11.0"
 
 [tool.pytest.ini_options]
