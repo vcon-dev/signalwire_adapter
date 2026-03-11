@@ -28,3 +28,7 @@ config.json
 # Runtime state and debug output
 processed_calls.json
 vcon_debug/
+
+# Python cache and test artifacts
+__pycache__/
+.coverage

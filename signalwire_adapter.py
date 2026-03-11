@@ -12,6 +12,8 @@ import logging
 import dotenv
 import requests
 import email.utils
+import boto3
+from botocore.exceptions import ClientError
 
 
 # Load environment variables from .env file
@@ -35,6 +37,15 @@ DEBUG_DIR = os.getenv('DEBUG_DIR', 'vcon_debug')
 # Poll interval in seconds (default to 5 minutes if not set)
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', 300))
 
+# S3 settings for re-hosting protected recordings
+S3_ENABLED = os.getenv('S3_ENABLED', 'false').lower() == 'true'
+S3_BUCKET = os.getenv('S3_BUCKET')
+S3_KEY_PREFIX = os.getenv('S3_KEY_PREFIX', 'recordings/')
+# AWS presigned URL expiry in seconds.
+# AWS hard-caps this at 604800 s (7 days) for IAM-user credentials;
+# role-based credentials allow even less.  Default: 604800.
+S3_PRESIGN_EXPIRY = int(os.getenv('S3_PRESIGN_EXPIRY', 604800))
+
 # File to store processed call SIDs
 PROCESSED_CALLS_FILE = os.getenv('PROCESSED_CALLS_FILE', 'processed_calls.json')
 
@@ -57,6 +68,9 @@ if not DEBUG_MODE and not WEBHOOK_URL:
 missing_vars = [var for var, value in required_vars.items() if value is None]
 if missing_vars:
     raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+if S3_ENABLED and not S3_BUCKET:
+    raise EnvironmentError("S3_ENABLED is true but S3_BUCKET is not set")
 
 # If in debug mode, ensure the debug directory exists
 if DEBUG_MODE:
@@ -271,7 +285,13 @@ def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
         recording_url = f"{SPACE_URL}{recording['uri']}"
         # remove the trailing .json and add .mp3
         recording_url = recording_url[:-5] + '.mp3'
-        
+
+        # If S3 is enabled, download the recording and re-host it so the
+        # URL in the vCon is publicly accessible without SignalWire credentials.
+        if S3_ENABLED:
+            audio_content = download_recording(recording_url)
+            recording_url = upload_recording_to_s3(audio_content, recording['sid'])
+
         # Create Dialog with named parameters
         dialog = Dialog(
             start=recording_date_created_iso, 
@@ -309,12 +329,46 @@ def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
     return vcon
 
 def download_recording(url):
-    """Download the recording file"""
+    """Download the recording file from SignalWire (requires auth)"""
     response = requests.get(url, auth=(PROJECT_ID, AUTH_TOKEN))
     if response.status_code == 200:
         return response.content
     else:
         raise Exception(f"Failed to download recording: {response.status_code}")
+
+def upload_recording_to_s3(audio_content, recording_sid):
+    """
+    Upload a recording to a private S3 bucket and return a presigned URL.
+
+    The object is stored privately; the presigned URL grants temporary
+    read access without requiring AWS credentials.  AWS caps presigned URL
+    expiry at 604800 s (7 days) for IAM-user credentials; configure
+    S3_PRESIGN_EXPIRY accordingly.
+
+    :param audio_content: Raw bytes of the MP3 recording
+    :param recording_sid: SignalWire recording SID, used as the S3 object key
+    :return: Presigned URL string
+    """
+    s3 = boto3.client('s3')
+    key = f"{S3_KEY_PREFIX}{recording_sid}.mp3"
+
+    try:
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=audio_content,
+            ContentType='audio/mpeg',
+        )
+        url = s3.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': S3_BUCKET, 'Key': key},
+            ExpiresIn=S3_PRESIGN_EXPIRY,
+        )
+    except ClientError as e:
+        raise Exception(f"Failed to upload recording {recording_sid} to S3: {e}") from e
+
+    logging.info(f"Uploaded recording {recording_sid} to S3: {url}")
+    return url
 
 def write_vcon_to_file(vcon, call_sid):
     """
@@ -380,20 +434,20 @@ def process_recordings(last_check_time):
         try:
             # Fetch call metadata once per call
             call_meta = fetch_call_meta(call_sid)
-            
+
             # Create a single vCon for all recordings in this call
             vcon = create_vcon_from_recordings(recordings, call_meta)
-            
+
             # Send the vCon to the configured webhook
             send_vcon_to_webhook(vcon, call_sid)
-            
+
             # Mark this call as processed
             processed_calls[call_sid] = datetime.now(UTC).isoformat()
-            
+
             logging.info(f"Processed vCon for call: {call_sid}")
         except Exception as e:
             logging.error(f"Error processing call {call_sid}: {str(e)}")
-    
+
     # Save the updated processed calls list with any new entries and after cleanup
     save_processed_calls(processed_calls)
 
