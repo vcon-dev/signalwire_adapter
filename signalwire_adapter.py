@@ -30,6 +30,10 @@ SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL')
 # Webhook URL (not required in debug mode)
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
+# Optional auth header sent with every webhook request
+WEBHOOK_AUTH_HEADER_NAME = os.getenv('WEBHOOK_AUTH_HEADER_NAME', 'x-conserver-api-token')
+WEBHOOK_AUTH_HEADER_VALUE = os.getenv('WEBHOOK_AUTH_HEADER_VALUE')
+
 # Debug mode settings
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
 DEBUG_DIR = os.getenv('DEBUG_DIR', 'vcon_debug')
@@ -398,6 +402,8 @@ def send_vcon_to_webhook(vcon, call_sid):
 
     # Normal webhook operation
     headers = {'Content-Type': 'application/json'}
+    if WEBHOOK_AUTH_HEADER_VALUE:
+        headers[WEBHOOK_AUTH_HEADER_NAME] = WEBHOOK_AUTH_HEADER_VALUE
     payload = vcon.to_json()
 
     try:
