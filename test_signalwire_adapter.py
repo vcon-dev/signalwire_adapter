@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, UTC
 from unittest.mock import patch, MagicMock, mock_open
 import email.utils
 import requests
+from botocore.exceptions import ClientError
 from vcon import Vcon
 from pathlib import Path
 
@@ -362,5 +363,82 @@ def test_main_function_with_process_error(mock_env_setup):
         mock_log_error.assert_called_once()
         assert "Error in main loop" in mock_log_error.call_args[0][0]
 
+def test_upload_recording_to_s3_presigned_url():
+    """upload_recording_to_s3 uploads privately and returns a presigned URL"""
+    mock_s3 = MagicMock()
+    mock_s3.generate_presigned_url.return_value = 'https://presigned-url.example.com/rec'
+
+    with patch('signalwire_adapter.boto3') as mock_boto3, \
+         patch('signalwire_adapter.S3_BUCKET', 'my-bucket'), \
+         patch('signalwire_adapter.S3_KEY_PREFIX', 'recordings/'), \
+         patch('signalwire_adapter.S3_PRESIGN_EXPIRY', 604800):
+        mock_boto3.client.return_value = mock_s3
+
+        url = signalwire_adapter.upload_recording_to_s3(b'audio-data', 'RE456')
+
+        mock_s3.put_object.assert_called_once_with(
+            Bucket='my-bucket',
+            Key='recordings/RE456.mp3',
+            Body=b'audio-data',
+            ContentType='audio/mpeg',
+        )
+        mock_s3.generate_presigned_url.assert_called_once_with(
+            'get_object',
+            Params={'Bucket': 'my-bucket', 'Key': 'recordings/RE456.mp3'},
+            ExpiresIn=604800,
+        )
+        assert url == 'https://presigned-url.example.com/rec'
+
+
+def test_upload_recording_to_s3_raises_on_client_error():
+    """upload_recording_to_s3 raises Exception when S3 returns a ClientError"""
+    mock_s3 = MagicMock()
+    mock_s3.put_object.side_effect = ClientError(
+        {'Error': {'Code': 'NoSuchBucket', 'Message': 'The bucket does not exist'}},
+        'PutObject',
+    )
+
+    with patch('signalwire_adapter.boto3') as mock_boto3, \
+         patch('signalwire_adapter.S3_BUCKET', 'missing-bucket'), \
+         patch('signalwire_adapter.S3_KEY_PREFIX', 'recordings/'), \
+         patch('signalwire_adapter.S3_PRESIGN_EXPIRY', 604800):
+        mock_boto3.client.return_value = mock_s3
+
+        with pytest.raises(Exception, match="Failed to upload recording"):
+            signalwire_adapter.upload_recording_to_s3(b'audio-data', 'RE789')
+
+
+def test_create_vcon_from_recordings_uses_s3_when_enabled(
+    mock_env_setup, mock_recording, mock_call_meta, mock_transcription
+):
+    """When S3_ENABLED=True, create_vcon_from_recordings downloads and re-hosts the recording"""
+    with patch('signalwire_adapter.fetch_transcription', return_value=mock_transcription), \
+         patch('signalwire_adapter.S3_ENABLED', True), \
+         patch('signalwire_adapter.download_recording', return_value=b'mp3-bytes') as mock_dl, \
+         patch('signalwire_adapter.upload_recording_to_s3', return_value='https://s3.example.com/rec.mp3') as mock_ul:
+
+        result = signalwire_adapter.create_vcon_from_recordings([mock_recording], mock_call_meta)
+
+        mock_dl.assert_called_once()
+        mock_ul.assert_called_once_with(b'mp3-bytes', mock_recording['sid'])
+        assert result.dialog[0]['url'] == 'https://s3.example.com/rec.mp3'
+
+
+def test_create_vcon_from_recordings_skips_s3_when_disabled(
+    mock_env_setup, mock_recording, mock_call_meta, mock_transcription
+):
+    """When S3_ENABLED=False, the original SignalWire URL is used unchanged"""
+    with patch('signalwire_adapter.fetch_transcription', return_value=mock_transcription), \
+         patch('signalwire_adapter.S3_ENABLED', False), \
+         patch('signalwire_adapter.download_recording') as mock_dl, \
+         patch('signalwire_adapter.upload_recording_to_s3') as mock_ul:
+
+        result = signalwire_adapter.create_vcon_from_recordings([mock_recording], mock_call_meta)
+
+        mock_dl.assert_not_called()
+        mock_ul.assert_not_called()
+        assert 'signalwire.com' in result.dialog[0]['url']
+
+
 if __name__ == "__main__":
-    pytest.main() 
+    pytest.main()
