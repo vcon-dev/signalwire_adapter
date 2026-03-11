@@ -267,7 +267,7 @@ def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
     :return: The created vCon object
     """
     vcon = Vcon.build_new()
-    vcon.vcon_dict.pop('vcon', None)  # 'vcon' version field is deprecated per IETF draft-ietf-vcon-vcon-core-01
+    vcon.vcon_dict['vcon'] = '0.4.0'
 
     # Create Party objects with named parameters, ensuring phone numbers are in E.164 format
     party1 = Party(tel=format_to_e164(call_meta['to_formatted']))
