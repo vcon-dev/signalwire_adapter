@@ -287,8 +287,8 @@ def create_vcon_from_recordings(recordings, call_meta) -> Vcon:
             
         # Calculate the correct URL for the recording
         recording_url = f"{SPACE_URL}{recording['uri']}"
-        # remove the trailing .json and add .mp3
-        recording_url = recording_url[:-5] + '.mp3'
+        # remove the trailing .json and add .wav (wav supports dual-channel)
+        recording_url = recording_url[:-5] + '.wav'
 
         # If S3 is enabled, download the recording and re-host it so the
         # URL in the vCon is publicly accessible without SignalWire credentials.
@@ -349,12 +349,12 @@ def upload_recording_to_s3(audio_content, recording_sid):
     expiry at 604800 s (7 days) for IAM-user credentials; configure
     S3_PRESIGN_EXPIRY accordingly.
 
-    :param audio_content: Raw bytes of the MP3 recording
+    :param audio_content: Raw bytes of the WAV recording
     :param recording_sid: SignalWire recording SID, used as the S3 object key
     :return: Presigned URL string
     """
     s3 = boto3.client('s3')
-    key = f"{S3_KEY_PREFIX}{recording_sid}.mp3"
+    key = f"{S3_KEY_PREFIX}{recording_sid}.wav"
 
     try:
         s3.put_object(
